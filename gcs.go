@@ -131,7 +131,51 @@ func (s *GcsBucket) Delete(ctx context.Context, k ds.Key) error {
 }
 
 func (s *GcsBucket) Query(ctx context.Context, q dsq.Query) (dsq.Results, error) {
-	return nil, fmt.Errorf("Todo: implement query for gcs datastore.")
+	if q.Orders != nil || q.Filters != nil {
+		return nil, fmt.Errorf("s3ds: filters or orders are not supported")
+	}
+
+	// S3 store a "/foo" key as "foo" so we need to trim the leading "/"
+	q.Prefix = strings.TrimPrefix(q.Prefix, "/")
+
+	fmt.Println("Quering prefix: %s, limit: %d, offset: %d", q.Prefix, q.Limit, q.Offset)
+	it := s.Client.Bucket(s.Config.Bucket).Objects(ctx, &storage.Query{
+		Prefix:    q.Prefix,
+		Delimiter: "/",
+	})
+
+	entries := make([]dsq.Entry, q.Limit)
+	index := 0
+	for {
+		index += 1
+		attrs, err := it.Next()
+		if err != nil {
+			break
+		}
+
+		if index < q.Offset || len(entries) >= q.Limit {
+			continue
+		}
+
+		entry := dsq.Entry{
+			Key:  ds.NewKey(attrs.Name).String(),
+			Size: int(attrs.Size),
+		}
+
+		if !q.KeysOnly {
+			fmt.Println("Getting file: ", attrs.Name)
+			value, err := s.Get(ctx, ds.NewKey(entry.Key))
+			if err != nil {
+				continue
+			}
+
+			entry.Value = value
+		}
+
+		entries = append(entries, entry)
+	}
+
+	return dsq.ResultsWithEntries(q, entries), nil
 }
 
 func (s *GcsBucket) Batch(_ context.Context) (ds.Batch, error) {
