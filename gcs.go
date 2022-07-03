@@ -18,7 +18,7 @@ import (
 const (
 	// listMax is the largest amount of objects you can request from S3 in a list
 	// call.
-	listMax = 1000
+	listMax = 100
 
 	// deleteMax is the largest amount of objects you can delete from S3 in a
 	// delete objects call.
@@ -135,21 +135,26 @@ func (s *GcsBucket) Query(ctx context.Context, q dsq.Query) (dsq.Results, error)
 		return nil, fmt.Errorf("s3ds: filters or orders are not supported")
 	}
 
+	limit := q.Limit + q.Offset
+	if limit == 0 || limit > listMax {
+		limit = listMax
+	}
+
 	// S3 store a "/foo" key as "foo" so we need to trim the leading "/"
 	q.Prefix = strings.TrimPrefix(q.Prefix, "/")
 
-	fmt.Println("Quering prefix: %s, limit: %d, offset: %d", q.Prefix, q.Limit, q.Offset)
+	fmt.Println("Quering prefix: %s, limit: %d, offset: %d", q.Prefix, limit, q.Offset)
 	it := s.Client.Bucket(s.Config.Bucket).Objects(ctx, &storage.Query{
 		Prefix:    q.Prefix,
 		Delimiter: "/",
 	})
 
-	entries := make([]dsq.Entry, q.Limit)
+	entries := make([]dsq.Entry, limit)
 	index := 0
 	for {
 		index += 1
 		attrs, err := it.Next()
-		if err != nil || len(entries) >= q.Limit {
+		if err != nil || len(entries) >= limit {
 			break
 		}
 
