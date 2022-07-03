@@ -162,11 +162,13 @@ func (s *GcsBucket) Query(ctx context.Context, q dsq.Query) (dsq.Results, error)
 			continue
 		}
 
+		fmt.Println("Found file: ", attrs)
 		entry := dsq.Entry{
 			Key:  ds.NewKey("/" + attrs.Name).String(),
 			Size: int(attrs.Size),
 		}
 
+		fmt.Println("Checking Found file: ", attrs.Name)
 		if !q.KeysOnly {
 			fmt.Println("Getting file: ", attrs.Name)
 			value, err := s.Get(ctx, ds.NewKey(entry.Key))
