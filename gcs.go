@@ -149,11 +149,11 @@ func (s *GcsBucket) Query(ctx context.Context, q dsq.Query) (dsq.Results, error)
 	for {
 		index += 1
 		attrs, err := it.Next()
-		if err != nil {
+		if err != nil || len(entries) >= q.Limit {
 			break
 		}
 
-		if index < q.Offset || len(entries) >= q.Limit {
+		if index < q.Offset {
 			continue
 		}
 
