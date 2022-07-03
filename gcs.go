@@ -163,7 +163,7 @@ func (s *GcsBucket) Query(ctx context.Context, q dsq.Query) (dsq.Results, error)
 		}
 
 		entry := dsq.Entry{
-			Key:  ds.NewKey(attrs.Name).String(),
+			Key:  ds.NewKey("/" + attrs.Name).String(),
 			Size: int(attrs.Size),
 		}
 
