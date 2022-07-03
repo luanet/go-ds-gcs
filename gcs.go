@@ -16,6 +16,7 @@ import (
 )
 
 const (
+	// TODO: max peer query is 100, GC will not remove all block
 	// listMax is the largest amount of objects you can request from S3 in a list
 	// call.
 	listMax = 100
@@ -140,16 +141,12 @@ func (s *GcsBucket) Query(ctx context.Context, q dsq.Query) (dsq.Results, error)
 		limit = listMax
 	}
 
-	// S3 store a "/foo" key as "foo" so we need to trim the leading "/"
-	q.Prefix = strings.TrimPrefix(q.Prefix, "/")
-
-	fmt.Println("Quering prefix: %s, limit: %d, offset: %d", q.Prefix, limit, q.Offset)
 	it := s.Client.Bucket(s.Config.Bucket).Objects(ctx, &storage.Query{
-		Prefix:    q.Prefix,
+		Prefix:    s.gcsPath(q.Prefix),
 		Delimiter: "/",
 	})
 
-	entries := make([]dsq.Entry, limit)
+	entries := []dsq.Entry{}
 	index := 0
 	for {
 		index += 1
@@ -162,15 +159,12 @@ func (s *GcsBucket) Query(ctx context.Context, q dsq.Query) (dsq.Results, error)
 			continue
 		}
 
-		fmt.Println("Found file: ", attrs)
 		entry := dsq.Entry{
-			Key:  ds.NewKey("/" + attrs.Name).String(),
+			Key:  ds.NewKey("/" + strings.TrimPrefix(attrs.Name, s.Config.RootDirectory)).String(),
 			Size: int(attrs.Size),
 		}
 
-		fmt.Println("Checking Found file: ", attrs.Name)
 		if !q.KeysOnly {
-			fmt.Println("Getting file: ", attrs.Name)
 			value, err := s.Get(ctx, ds.NewKey(entry.Key))
 			if err != nil {
 				continue
@@ -198,7 +192,11 @@ func (s *GcsBucket) Close() error {
 }
 
 func (s *GcsBucket) gcsPath(p string) string {
-	return path.Join(s.Config.RootDirectory, strings.TrimPrefix(p, "/"))
+	if p == "/" {
+		return s.Config.RootDirectory + "/"
+	} else {
+		return path.Join(s.Config.RootDirectory, p)
+	}
 }
 
 type gcsBatch struct {
