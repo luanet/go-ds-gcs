@@ -16,10 +16,9 @@ import (
 )
 
 const (
-	// TODO: max peer query is 100, GC will not remove all block
 	// listMax is the largest amount of objects you can request from S3 in a list
 	// call.
-	listMax = 100
+	listMax = 11
 
 	// deleteMax is the largest amount of objects you can delete from S3 in a
 	// delete objects call.
@@ -85,19 +84,26 @@ func (s *GcsBucket) Sync(ctx context.Context, prefix ds.Key) error {
 
 func (s *GcsBucket) Get(ctx context.Context, k ds.Key) ([]byte, error) {
 	rc, err := s.Client.Bucket(s.Config.Bucket).Object(s.gcsPath(k.String())).NewReader(ctx)
+	if err == storage.ErrObjectNotExist {
+		return nil, ds.ErrNotFound
+	}
+
 	if err != nil {
-		return nil, fmt.Errorf("Object(%q).NewReader: %v", k.String(), err)
+		return nil, err
 	}
 
 	defer rc.Close()
-
 	return ioutil.ReadAll(rc)
 }
 
 func (s *GcsBucket) Has(ctx context.Context, k ds.Key) (exists bool, err error) {
-	o := s.Client.Bucket(s.Config.Bucket).Object(s.gcsPath(k.String()))
-	if _, err := o.Attrs(ctx); err != nil {
-		return false, nil
+	_, err = s.GetSize(ctx, k)
+	if err != nil {
+		if err == ds.ErrNotFound {
+			return false, nil
+		}
+
+		return false, err
 	}
 
 	return true, nil
@@ -106,8 +112,12 @@ func (s *GcsBucket) Has(ctx context.Context, k ds.Key) (exists bool, err error) 
 func (s *GcsBucket) GetSize(ctx context.Context, k ds.Key) (size int, err error) {
 	o := s.Client.Bucket(s.Config.Bucket).Object(s.gcsPath(k.String()))
 	attrs, err := o.Attrs(ctx)
-	if err != nil {
+	if err == storage.ErrObjectNotExist {
 		return -1, ds.ErrNotFound
+	}
+
+	if err != nil {
+		return -1, err
 	}
 
 	return int(attrs.Size), nil
