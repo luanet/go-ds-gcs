@@ -18,7 +18,7 @@ import (
 const (
 	// listMax is the largest amount of objects you can request from S3 in a list
 	// call.
-	listMax = 1000
+	listMax = 11
 
 	// deleteMax is the largest amount of objects you can delete from S3 in a
 	// delete objects call.
@@ -84,19 +84,26 @@ func (s *GcsBucket) Sync(ctx context.Context, prefix ds.Key) error {
 
 func (s *GcsBucket) Get(ctx context.Context, k ds.Key) ([]byte, error) {
 	rc, err := s.Client.Bucket(s.Config.Bucket).Object(s.gcsPath(k.String())).NewReader(ctx)
+	if err == storage.ErrObjectNotExist {
+		return nil, ds.ErrNotFound
+	}
+
 	if err != nil {
-		return nil, fmt.Errorf("Object(%q).NewReader: %v", k.String(), err)
+		return nil, err
 	}
 
 	defer rc.Close()
-
 	return ioutil.ReadAll(rc)
 }
 
 func (s *GcsBucket) Has(ctx context.Context, k ds.Key) (exists bool, err error) {
-	o := s.Client.Bucket(s.Config.Bucket).Object(s.gcsPath(k.String()))
-	if _, err := o.Attrs(ctx); err != nil {
-		return false, nil
+	_, err = s.GetSize(ctx, k)
+	if err != nil {
+		if err == ds.ErrNotFound {
+			return false, nil
+		}
+
+		return false, err
 	}
 
 	return true, nil
@@ -105,8 +112,12 @@ func (s *GcsBucket) Has(ctx context.Context, k ds.Key) (exists bool, err error) 
 func (s *GcsBucket) GetSize(ctx context.Context, k ds.Key) (size int, err error) {
 	o := s.Client.Bucket(s.Config.Bucket).Object(s.gcsPath(k.String()))
 	attrs, err := o.Attrs(ctx)
-	if err != nil {
+	if err == storage.ErrObjectNotExist {
 		return -1, ds.ErrNotFound
+	}
+
+	if err != nil {
+		return -1, err
 	}
 
 	return int(attrs.Size), nil
@@ -131,7 +142,51 @@ func (s *GcsBucket) Delete(ctx context.Context, k ds.Key) error {
 }
 
 func (s *GcsBucket) Query(ctx context.Context, q dsq.Query) (dsq.Results, error) {
-	return nil, fmt.Errorf("Todo: implement query for gcs datastore.")
+	if q.Orders != nil || q.Filters != nil {
+		return nil, fmt.Errorf("s3ds: filters or orders are not supported")
+	}
+
+	limit := q.Limit + q.Offset
+	if limit == 0 || limit > listMax {
+		limit = listMax
+	}
+
+	it := s.Client.Bucket(s.Config.Bucket).Objects(ctx, &storage.Query{
+		Prefix:    s.gcsPath(q.Prefix),
+		Delimiter: "/",
+	})
+
+	entries := []dsq.Entry{}
+	index := 0
+	for {
+		index += 1
+		attrs, err := it.Next()
+		if err != nil || len(entries) >= limit {
+			break
+		}
+
+		if index < q.Offset {
+			continue
+		}
+
+		entry := dsq.Entry{
+			Key:  ds.NewKey("/" + strings.TrimPrefix(attrs.Name, s.Config.RootDirectory)).String(),
+			Size: int(attrs.Size),
+		}
+
+		if !q.KeysOnly {
+			value, err := s.Get(ctx, ds.NewKey(entry.Key))
+			if err != nil {
+				continue
+			}
+
+			entry.Value = value
+		}
+
+		entries = append(entries, entry)
+	}
+
+	return dsq.ResultsWithEntries(q, entries), nil
 }
 
 func (s *GcsBucket) Batch(_ context.Context) (ds.Batch, error) {
@@ -147,7 +202,11 @@ func (s *GcsBucket) Close() error {
 }
 
 func (s *GcsBucket) gcsPath(p string) string {
-	return path.Join(s.Config.RootDirectory, strings.TrimPrefix(p, "/"))
+	if p == "/" {
+		return s.Config.RootDirectory + "/"
+	} else {
+		return path.Join(s.Config.RootDirectory, p)
+	}
 }
 
 type gcsBatch struct {
